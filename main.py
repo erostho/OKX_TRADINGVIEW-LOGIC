@@ -262,26 +262,93 @@ def okx_top_usdt_symbols(limit=300, price_max=1.0):
                  price_max, total_usdt, total_under, len(symbols))
     return symbols
 
-def okx_candles(instId: str, bar: str = "1H", limit: int = 300) -> pd.DataFrame | None:
-    """Get OHLCV in ascending order. instId like 'BTC-USDT'"""
-    url = f"{OKX_BASE}/api/v5/market/candles"
-    params = {"instId": instId, "bar": bar, "limit": limit}
-    r = requests.get(url, params=params, timeout=20)
-    if r.status_code != 300:
-        logging.warning("Candles failed %s: %s", instId, r.text[:120])
+def okx_candles(instId: str, bar: str = "1H", limit: int = 300, drop_unconfirmed: bool = True) -> pd.DataFrame | None:
+    """
+    Lấy OHLCV tăng dần thời gian, cố gắng đủ 'limit' nến.
+    - Tự động gọi /market/history-candles để ghép trang (>100 nến).
+    - Chuẩn hoá số cột (thiếu 'confirm' thì tự set = '1').
+    - Có thể bỏ nến chưa đóng (confirm=='0') nếu drop_unconfirmed=True.
+    """
+    def _parse_one(resp_json):
+        data = resp_json.get("data", [])
+        if not data:
+            return pd.DataFrame()
+
+        # Một số trường hợp OKX trả 8 cột (không có confirm). Mặc định thêm confirm='1'
+        def _norm_row(row):
+            row = list(row)
+            if len(row) == 9:
+                # ts,o,h,l,c,vol,volCcy,volUsd,confirm
+                return row
+            elif len(row) == 8:
+                # thiếu confirm -> thêm '1'
+                return row + ["1"]
+            elif len(row) >= 5:
+                # ít nhất phải có ts,o,h,l,c (bổ sung vol=0, volCcy=0, volUsd=0, confirm=1)
+                need = 9 - len(row)
+                return row + (["0"] * (need - 1)) + ["1"]
+            else:
+                return None
+
+        rows = []
+        for r in data:
+            nr = _norm_row(r)
+            if nr:
+                rows.append(nr)
+
+        if not rows:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(rows, columns=["ts","o","h","l","c","vol","volCcy","volUsd","confirm"])
+        # Kiểu dữ liệu
+        for col in ["o","h","l","c","vol"]:
+            df[col] = df[col].astype(float)
+        df["ts"] = pd.to_datetime(df["ts"].astype(int), unit="ms", utc=True)
+        df["confirm"] = df["confirm"].astype(str)
+        return df
+
+    # Lần 1: lấy mới nhất
+    base = f"{OKX_BASE}/api/v5/market/candles"
+    hist = f"{OKX_BASE}/api/v5/market/history-candles"
+    params = {"instId": instId, "bar": bar, "limit": min(limit, 100)}
+
+    try:
+        r = requests.get(base, params=params, timeout=20)
+        r.raise_for_status()
+        df_all = _parse_one(r.json())
+
+        # Ghép thêm nếu cần >100
+        while len(df_all) < limit:
+            if df_all.empty:
+                break
+            # oldest ts hiện có (OKX trả mới→cũ)
+            oldest_ts = int(df_all["ts"].min().value / 10**6)  # ms
+            r2 = requests.get(hist, params={"instId": instId, "bar": bar, "after": oldest_ts, "limit": 100}, timeout=20)
+            r2.raise_for_status()
+            df_more = _parse_one(r2.json())
+            if df_more.empty:
+                break
+            # chỉ ghép phần cũ hơn
+            df_all = pd.concat([df_all, df_more[df_more["ts"] < df_all["ts"].min()]], ignore_index=True)
+            # tránh vòng lặp vô hạn
+            if len(df_more) < 2:
+                break
+
+        if df_all.empty:
+            logging.warning("Candles empty %s", instId)
+            return None
+        # Sắp xếp thời gian tăng dần
+        df_all = df_all.sort_values("ts").reset_index(drop=True)
+
+        # Bỏ nến chưa đóng nếu cần
+        if drop_unconfirmed and (len(df_all) > 0) and (df_all["confirm"].iloc[-1] != "1"):
+            df_all = df_all.iloc[:-1, :]
+
+        return df_all
+
+    except Exception as e:
+        logging.warning("Candles failed %s: %s", instId, e)
         return None
-    data = r.json().get("data", [])
-    if not data:
-        return None
-    df = pd.DataFrame(data, columns=[
-        "ts","o","h","l","c","vol","volCcy","volUsd","confirm"
-    ])
-    # Convert types
-    for col in ["o","h","l","c","vol"]:
-        df[col] = df[col].astype(float)
-    df["ts"] = pd.to_datetime(df["ts"].astype(int), unit="ms", utc=True)
-    df = df.sort_values("ts").reset_index(drop=True)
-    return df
 
 # ======================
 # TA functions (mirror Pine)
