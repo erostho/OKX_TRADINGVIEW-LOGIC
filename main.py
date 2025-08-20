@@ -370,7 +370,8 @@ def pine_like_buy_strong(df: pd.DataFrame) -> tuple[bool, dict]:
     buy_nearly = (~is_sideway) & (buy_score >= 3) & (macd_cross_up | early_bottom | momentum_up)
 
     enable_trend_filter = True  # Pine default true
-    buy_confirmed = buy_nearly & vol_break & ((~enable_trend_filter) | trend_up) & is_trending
+    cond_trend = trend_up if enable_trend_filter else True
+    buy_confirmed = buy_nearly & vol_break & cond_trend & is_trending
 
     strong_buy = buy_confirmed & (ema20 > ema50) & (c > ema20)
 
