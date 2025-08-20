@@ -126,6 +126,34 @@ def mark_sent(key: str):
 # ======================
 # Google Sheets Writer
 # ======================
+def clean_old_rows(ws, days=1):
+    """Xoá các dòng có Ngày (cột D) cũ hơn days ngày (theo UTC+7)."""
+    import datetime, pytz
+    from dateutil import parser
+
+    values = ws.get_all_values()
+    if not values or len(values) < 2:
+        return
+    header = values[0]
+    rows = values[1:]
+    keep = [header]
+
+    # Tính cutoff
+    cutoff = datetime.datetime.now(pytz.timezone("Asia/Ho_Chi_Minh")) - datetime.timedelta(days=days)
+
+    for row in rows:
+        try:
+            dt = parser.parse(row[3])  # cột "Ngày" (index 3)
+            if dt >= cutoff:
+                keep.append(row)
+        except:
+            keep.append(row)  # Nếu parse lỗi thì giữ nguyên
+
+    # Clear sheet rồi ghi lại dữ liệu còn giữ
+    ws.clear()
+    ws.append_rows(keep, value_input_option="USER_ENTERED")
+    logging.info("🧹 Đã xoá dữ liệu cũ hơn %d ngày, giữ lại %d dòng", days, len(keep)-1)
+    
 def write_rows_to_gsheet(rows):
     """Append rows to SHEET_NAME. Each row is a list of columns."""
     sheet_id = parse_sheet_id(SHEET_CSV_URL)
@@ -147,7 +175,9 @@ def write_rows_to_gsheet(rows):
             ws = sh.add_worksheet(title=SHEET_NAME, rows=2000, cols=10)
             # Header per sample
             ws.append_row(["Coin","Tín hiệu","Giá","Ngày","Tần suất","Type","Giá Mua dự kiến","Giá Bán dự kiến"])
-
+            # Auto xoá dữ liệu cũ hơn 1 ngày
+            clean_old_rows(ws, days=1)
+            
         # Ensure header exists
         values = ws.get_all_values()
         if not values:
@@ -161,7 +191,8 @@ def write_rows_to_gsheet(rows):
     except Exception as e:
         logging.warning("GSheet write failed: %s", e)
         return False
-
+        
+    
 def write_rows_to_excel(rows, filename="DATA_SPOT.xlsx"):
     try:
         df = pd.DataFrame(rows, columns=["Coin","Tín hiệu","Giá","Ngày","Tần suất","Type","Giá Mua dự kiến","Giá Bán dự kiến"])
