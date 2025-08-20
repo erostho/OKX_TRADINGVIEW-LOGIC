@@ -412,7 +412,7 @@ def scan_once():
 
             # Telegram message
             msg = (
-                f"🔥 <b>MUA MẠNH</b> {instId} | TF <b>{BAR}</b>\n"
+                f"🔥 <b>TRADINGVIEW MUA MẠNH</b> {instId} | TF <b>{BAR}</b>\n"
                 f"Giá hiện tại: <code>{price:.8f}</code>\n"
                 f"Vùng mua (mid≈low): <code>{buy_mid:.8f}</code>\n"
                 f"Đỉnh gần nhất: <code>{real_top if real_top is not None else 'N/A'}</code>\n"
