@@ -1,6 +1,6 @@
 # main.py
 # Port logic from "PRO SPOT SMART ASSISTANT V2.6-GOB-STABLE-WITHDASHBOARD" (Pine v6)
-# to a Python worker that scans top 200 OKX USDT pairs and writes results to
+# to a Python worker that scans top 300 OKX USDT pairs and writes results to
 # Google Sheet (tab "DATA_SPOT") or an Excel fallback, and sends Telegram alerts.
 #
 # Requirements (add to requirements.txt):
@@ -16,7 +16,7 @@
 #   TELEGRAM_CHAT_ID      - Chat ID (group/channel/user)
 #   OKX_INSTTYPE          - default "SPOT" (or "SWAP" if you want futures)
 #   BAR                   - default "1H" (OKX bar string: 1m, 5m, 15m, 1H, 4H, 1D, ...)
-#   TOP_N                 - default "200"
+#   TOP_N                 - default "300"
 #   INTERVAL_SEC          - default "180" (scan loop interval)
 #   SERVICE_ACCOUNT_FILE  - path to service account JSON (default: /etc/secrets/service_account.json)
 #   SHEET_CSV_URL         - any Google Sheets URL of the target spreadsheet; ID is parsed from it
@@ -50,8 +50,11 @@ TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
 OKX_INSTTYPE = os.getenv("OKX_INSTTYPE", "SPOT").upper()
 BAR          = os.getenv("BAR", "1H")
-TOP_N        = int(os.getenv("TOP_N", "200"))
+TOP_N        = int(os.getenv("TOP_N", "300"))
 INTERVAL_SEC = int(os.getenv("INTERVAL_SEC", "180"))
+
+# Chỉ giữ các cặp USDT có giá hiện tại < PRICE_MAX_USDT
+PRICE_MAX_USDT = float(os.getenv("PRICE_MAX_USDT", "1.0"))
 
 SERVICE_ACCOUNT_FILE = os.getenv("SERVICE_ACCOUNT_FILE", "/etc/secrets/service_account.json")
 SHEET_CSV_URL = os.getenv("SHEET_CSV_URL", "")
@@ -213,35 +216,58 @@ def write_rows_to_excel(rows, filename="DATA_SPOT.xlsx"):
 # ======================
 OKX_BASE = "https://www.okx.com"
 
-def okx_top_usdt_symbols(limit=200):
-    """Return top USDT symbols by 24h quote volume (instType filtered)."""
+def okx_top_usdt_symbols(limit=300, price_max=1.0):
+    """
+    Lấy toàn bộ tickers theo instType (SPOT/SWAP), chỉ giữ cặp *-USDT có last < price_max,
+    rồi sort theo volCcy24h giảm dần và cắt limit.
+    """
     url = f"{OKX_BASE}/api/v5/market/tickers"
     params = {"instType": OKX_INSTTYPE}
     r = requests.get(url, params=params, timeout=20)
     r.raise_for_status()
     data = r.json().get("data", [])
-    # Filter only *-USDT
+
     items = []
+    total_usdt = total_under = 0
     for x in data:
         instId = x.get("instId", "")
         if not instId.endswith("-USDT"):
             continue
-        # prefer quote volume; fall back to volUsd24h/volCcy24h
+        total_usdt += 1
+
+        # Giá hiện tại
+        try:
+            last = float(x.get("last", "0"))
+        except:
+            last = 0.0
+        if last <= 0 or last >= price_max:
+            continue
+        total_under += 1
+
+        # Khối lượng (ưu tiên quote volume)
         vol_quote = x.get("volCcy24h") or x.get("volUsd24h") or x.get("vol24h") or "0"
         try:
             v = float(vol_quote)
         except:
             v = 0.0
-        items.append((instId, v))
-    items.sort(key=lambda t: t[1], reverse=True)
-    return [sym for sym, _ in items[:limit]]
 
-def okx_candles(instId: str, bar: str = "1H", limit: int = 200) -> pd.DataFrame | None:
+        items.append((instId, v, last))
+
+    items.sort(key=lambda t: t[1], reverse=True)  # sort theo volume giảm dần
+    symbols = [sym for sym, _, _ in items]
+    if limit:
+        symbols = symbols[:limit]
+
+    logging.info("Filter price<%.4f: USDT pairs=%d → under=%d → selected=%d",
+                 price_max, total_usdt, total_under, len(symbols))
+    return symbols
+
+def okx_candles(instId: str, bar: str = "1H", limit: int = 300) -> pd.DataFrame | None:
     """Get OHLCV in ascending order. instId like 'BTC-USDT'"""
     url = f"{OKX_BASE}/api/v5/market/candles"
     params = {"instId": instId, "bar": bar, "limit": limit}
     r = requests.get(url, params=params, timeout=20)
-    if r.status_code != 200:
+    if r.status_code != 300:
         logging.warning("Candles failed %s: %s", instId, r.text[:120])
         return None
     data = r.json().get("data", [])
@@ -426,8 +452,9 @@ def build_row(symbol: str, price: float, buy_mid: float | None, real_top: float 
 
 def scan_once():
     db_init()
-    symbols = okx_top_usdt_symbols(TOP_N)
-    logging.info("Scanning %d symbols (bar %s, instType %s)", len(symbols), BAR, OKX_INSTTYPE)
+    symbols = okx_top_usdt_symbols(TOP_N, PRICE_MAX_USDT)
+    logging.info("Scanning %d symbols (bar %s, instType %s, price<%.4f)",
+             len(symbols), BAR, OKX_INSTTYPE, PRICE_MAX_USDT)
     sess = requests.Session()
 
     found_rows = []
