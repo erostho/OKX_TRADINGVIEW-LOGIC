@@ -1,3 +1,6 @@
-requests>=2.31.0
-gspread>=6.0.0
-google-auth>=2.29.0
+requests
+pandas
+numpy
+gspread
+google-auth
+openpyxl
