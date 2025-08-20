@@ -317,7 +317,7 @@ def adx(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14):
 # ======================
 # Pine -> Python: MUA MẠNH
 # ======================
-def pine_like_buy_strong(df: pd.DataFrame) -> tuple[bool, dict]:
+def pine_like_buy_strong(df: pd.DataFrame):
     """
     Return (is_strong_buy, extras)
     extras: {
@@ -393,8 +393,19 @@ def pine_like_buy_strong(df: pd.DataFrame) -> tuple[bool, dict]:
         "support_mid": float(l.iloc[-1]) if buy_confirmed.iloc[-1] else None,
         "real_top": recent_real_top_price
     }
+    debug = {
+        "close": float(c.iloc[-1]),
+        "rsi": float(rsi14.iloc[-1]),
+        "adx": float(adx_val.iloc[-1]),
+        "vol_break": bool(vol_break.iloc[-1]),
+        "buy_score": int(buy_score.iloc[-1]) if not np.isnan(buy_score.iloc[-1]) else 0,
+        "buy_nearly": bool(buy_nearly.iloc[-1]),
+        "buy_confirmed": bool(buy_confirmed.iloc[-1]),
+        "trend_up": bool(trend_up.iloc[-1]),
+        "is_trending": bool(is_trending.iloc[-1]),
+    }
 
-    return bool(strong_buy.iloc[-1] if len(strong_buy) else False), extras
+    return bool(strong_buy.iloc[-1] if len(strong_buy) else False), extras, debug
 
 # ======================
 # Core run
@@ -420,13 +431,27 @@ def scan_once():
     sess = requests.Session()
 
     found_rows = []
+    t_round = time.time()
     for i, instId in enumerate(symbols, 1):
+        t0 = time.time()
         try:
             df = okx_candles(instId, BAR, 200)
             if df is None or len(df) < 60:
+                logging.info(f"[{i}/{len(symbols)}] {instId} - thiếu dữ liệu, skip")
                 continue
 
-            is_buy, ex = pine_like_buy_strong(df)
+            is_buy, ex, dbg = pine_like_buy_strong(df)
+
+            # log chi tiết mỗi coin
+            logging.info(
+                f"[{i}/{len(symbols)}] {instId} | close={dbg['close']:.8f} "
+                f"RSI={dbg['rsi']:.1f} ADX={dbg['adx']:.1f} "
+                f"volBreak={dbg['vol_break']} buyScore={dbg['buy_score']} "
+                f"near={dbg['buy_nearly']} confirm={dbg['buy_confirmed']} "
+                f"trendUp={dbg['trend_up']} trending={dbg['is_trending']} "
+                f"strongBuy={is_buy} | {time.time()-t0:.2f}s"
+            )
+
             if not is_buy:
                 continue
 
@@ -434,31 +459,33 @@ def scan_once():
             last_ts = df["ts"].iloc[-1]
             key = f"{instId}|{BAR}|{int(last_ts.value/10**9)}"
             if already_sent(key):
+                logging.info(f"    ↳ duplicate, đã gửi trước đó: {key}")
                 continue
 
-            price = ex.get("entry")
+            price   = ex.get("entry")
             buy_mid = ex.get("support_mid")
-            real_top = ex.get("real_top")
+            real_top= ex.get("real_top")
+
             row = build_row(instId, price, buy_mid, real_top)
             found_rows.append(row)
 
-            # Telegram message
-            msg = (
+            send_telegram(
                 f"🔥 <b>TRADINGVIEW MUA MẠNH</b> {instId} | TF <b>{BAR}</b>\n"
-                f"Giá hiện tại: <code>{price:.8f}</code>\n"
-                f"Vùng mua (mid≈low): <code>{buy_mid:.8f}</code>\n"
-                f"Đỉnh gần nhất: <code>{real_top if real_top is not None else 'N/A'}</code>\n"
+                f"Giá: <code>{price:.8f}</code>\n"
+                f"Vùng mua≈low: <code>{'' if buy_mid is None else f'{buy_mid:.8f}'}</code>\n"
+                f"Đỉnh gần: <code>{'N/A' if real_top is None else f'{real_top:.8f}'}</code>\n"
                 f"⏱ {now_vn_str()}"
             )
-            send_telegram(msg)
-
             mark_sent(key)
 
         except Exception as e:
-            logging.warning("Scan error %s: %s", instId, e)
+            logging.warning(f"[{i}/{len(symbols)}] {instId} - lỗi: {e}")
 
-        # gentle throttle to avoid hammering the API
+        # throttle nhẹ cho OKX
         time.sleep(0.08)
+
+    logging.info(f"Round done: {len(symbols)} symbols, found={len(found_rows)}, "
+                 f"elapsed={time.time()-t_round:.2f}s")
 
     # Write results if any
     if found_rows:
@@ -480,4 +507,5 @@ def main_loop():
         time.sleep(sleep_s)
 
 if __name__ == "__main__":
-    main_loop()
+    scan_once()
+    #main_loop()
