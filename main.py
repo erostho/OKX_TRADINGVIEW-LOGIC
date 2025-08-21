@@ -564,7 +564,7 @@ def scan_once():
             found_rows.append(row)
 
             send_telegram(
-                f"🔥 <b>TRADINGVIEW MUA MẠNH</b>" 
+                f"🔥 <b>TRADINGVIEW MUA MẠNH</b>"
                 f"{instId} | TF <b>{BAR}</b>\n"
                 f"Giá: <code>{price:.8f}</code>\n"
                 f"Vùng mua≈low: <code>{'' if buy_mid is None else f'{buy_mid:.8f}'}</code>\n"
