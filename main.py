@@ -511,7 +511,7 @@ def build_row(symbol: str, price: float, buy_mid: float | None, real_top: float 
         "MUA MẠNH",
         round(price, 8) if price is not None else "",
         now_vn_str(),
-        60,
+        120,
         "TRADINGVIEW",
         round(buy_mid, 8) if buy_mid is not None else "",
         round(real_top, 8) if real_top is not None else ""
